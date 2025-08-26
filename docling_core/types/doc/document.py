@@ -314,27 +314,40 @@ class TableCell(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def from_dict_format(cls, data: Any) -> Any:
-        """from_dict_format."""
         if isinstance(data, dict):
-            # Check if this is a native BoundingBox or a bbox from docling-ibm-models
-            if (
-                # "bbox" not in data
-                # or data["bbox"] is None
-                # or isinstance(data["bbox"], BoundingBox)
-                "text"
-                in data
-            ):
+            if "text" in data:
                 return data
+            text_cells = data.pop("text_cell_bboxes", None)
             text = data["bbox"].get("token", "")
-            if not len(text):
-                text_cells = data.pop("text_cell_bboxes", None)
-                if text_cells:
-                    for el in text_cells:
-                        text += el["token"] + " "
-
-                text = text.strip()
+            if not text and text_cells:
+                # Group tokens into lines by their vertical position (t value)
+                lines = {}
+                for el in text_cells:
+                    line_key = round(el["t"] / 5) * 5  # group by ~same line height
+                    lines.setdefault(line_key, []).append(el)
+                sorted_tokens = []
+                for line_y in sorted(lines.keys()):
+                    line_tokens = lines[line_y]
+                    line_text = " ".join(
+                        el.get("token", "") for el in line_tokens
+                    ).strip()
+                    # Default to LTR sorting
+                    sort_key = lambda el: (el["t"], el["l"])
+                    if line_text:
+                        try:
+                            lang = detect(line_text)
+                            if lang == "ar":
+                                sort_key = lambda el: (
+                                    el["t"],
+                                    -el["l"],
+                                )  # RTL if Arabic
+                        except LangDetectException:
+                            pass  # fallback to default LTR
+                    # Sort and collect tokens
+                    line_tokens.sort(key=sort_key)
+                    sorted_tokens.extend(line_tokens)
+                text = " ".join(el.get("token", "") for el in sorted_tokens).strip()
             data["text"] = text
-
         return data
 
 
